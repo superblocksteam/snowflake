@@ -4,6 +4,7 @@ import {
   ExecutionOutput,
   IntegrationError,
   RawRequest,
+  ResolvedActionConfigurationProperty,
   SnowflakeActionConfiguration,
   SnowflakeDatasourceConfiguration,
   Table,
@@ -27,7 +28,7 @@ export default class SnowflakePlugin extends BasePlugin {
     property,
     escapeStrings
   }: // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  ActionConfigurationResolutionContext): Promise<string | any[]> {
+  ActionConfigurationResolutionContext): Promise<ResolvedActionConfigurationProperty> {
     return resolveActionConfigurationPropertyUtil(
       super.resolveActionConfigurationProperty,
       {
