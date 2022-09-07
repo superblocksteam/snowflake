@@ -1,6 +1,6 @@
 {
   "name": "@superblocksteam/snowflake",
-  "version": "0.2005.0",
+  "version": "0.2016.0",
   "description": "Superblocks Snowflake Plugin",
   "publishConfig": {
     "registry": "https://npm.pkg.github.com"

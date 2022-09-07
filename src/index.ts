@@ -66,7 +66,7 @@ export default class SnowflakePlugin extends BasePlugin {
     } catch (err) {
       throw new IntegrationError(`Snowflake query failed, ${err.message}`);
     } finally {
-      if (client) client.destroy();
+      if (client) await this.destroyClient(client);
     }
   }
 
@@ -88,9 +88,13 @@ export default class SnowflakePlugin extends BasePlugin {
     // Try both quoted and unquoted calls since we don't know how the identifier was set during creation
     // Ref: https://docs.snowflake.com/en/sql-reference/identifiers-syntax.html
     try {
-      rows = await client.execute(this.getMetadataQuery(database, schema));
+      try {
+        rows = await client.execute(this.getMetadataQuery(database, schema));
+      } catch (err) {
+        rows = await client.execute(this.getMetadataQuery(database, schema, false));
+      }
     } catch (err) {
-      rows = await client.execute(this.getMetadataQuery(database, schema, false));
+      throw new IntegrationError(`Fetching Snowflake metadata failed, ${err.message}`);
     }
 
     const entities = rows.reduce((acc, attribute) => {
@@ -110,7 +114,7 @@ export default class SnowflakePlugin extends BasePlugin {
       return [...acc, table];
     }, []);
 
-    client.destroy();
+    this.destroyClient(client);
 
     return {
       dbSchema: { tables: entities }
@@ -151,6 +155,14 @@ export default class SnowflakePlugin extends BasePlugin {
       return client;
     } catch (err) {
       throw new IntegrationError(`Snowflake configuration error, ${err.message}`);
+    }
+  }
+
+  private async destroyClient(client: Snowflake): Promise<void> {
+    try {
+      await client.destroy();
+    } catch (err) {
+      throw new IntegrationError(`Client teardown failed, ${err.message}`);
     }
   }
 
@@ -209,7 +221,7 @@ export default class SnowflakePlugin extends BasePlugin {
       }
     } finally {
       if (client) {
-        await client.destroy();
+        await this.destroyClient(client);
       }
     }
   }
