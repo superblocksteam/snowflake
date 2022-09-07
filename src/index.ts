@@ -50,7 +50,7 @@ export default class SnowflakePlugin extends BasePlugin {
     const client = await this.createClient(datasourceConfiguration);
     try {
       const ret = new ExecutionOutput();
-      const query = actionConfiguration.body;
+      const query = actionConfiguration.body ?? '';
       if (isEmpty(query)) {
         return ret;
       }
@@ -81,7 +81,7 @@ export default class SnowflakePlugin extends BasePlugin {
   async metadata(datasourceConfiguration: SnowflakeDatasourceConfiguration): Promise<DatasourceMetadataDto> {
     const client = await this.createClient(datasourceConfiguration);
     const auth = datasourceConfiguration.authentication;
-    const database = auth?.custom?.databaseName.value;
+    const database = auth?.custom?.databaseName?.value ?? '';
     const schema = auth?.custom?.schema?.value;
 
     let rows;
@@ -201,7 +201,7 @@ export default class SnowflakePlugin extends BasePlugin {
     if (!auth) {
       throw new IntegrationError('Auth not specified for Snowflake plugin');
     }
-    const database = auth.custom?.databaseName.value;
+    const database = auth.custom?.databaseName?.value ?? '';
     const schema = auth.custom?.schema?.value;
 
     // Try both quoted and unquoted calls since we don't know how the identifier was set during creation
