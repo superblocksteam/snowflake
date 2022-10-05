@@ -12,15 +12,17 @@ import {
 } from '@superblocksteam/shared';
 import {
   ActionConfigurationResolutionContext,
-  BasePlugin,
+  DatabasePlugin,
   normalizeTableColumnNames,
   PluginExecutionProps,
-  resolveActionConfigurationPropertyUtil
+  resolveActionConfigurationPropertyUtil,
+  CreateConnection,
+  DestroyConnection
 } from '@superblocksteam/shared-backend';
 import { isEmpty } from 'lodash';
 import { Snowflake } from 'snowflake-promise';
 
-export default class SnowflakePlugin extends BasePlugin {
+export default class SnowflakePlugin extends DatabasePlugin {
   async resolveActionConfigurationProperty({
     context,
     actionConfiguration,
@@ -29,16 +31,24 @@ export default class SnowflakePlugin extends BasePlugin {
     escapeStrings
   }: // eslint-disable-next-line @typescript-eslint/no-explicit-any
   ActionConfigurationResolutionContext): Promise<ResolvedActionConfigurationProperty> {
-    return resolveActionConfigurationPropertyUtil(
-      super.resolveActionConfigurationProperty,
-      {
-        context,
-        actionConfiguration,
-        files,
-        property,
-        escapeStrings
-      },
-      false
+    return this.tracer.startActiveSpan(
+      'plugin.resolveActionConfigurationProperty',
+      { attributes: this.getTraceTags(), kind: 1 /* SpanKind.SERVER */ },
+      async (span) => {
+        const resolvedActionConfigurationProperty = resolveActionConfigurationPropertyUtil(
+          super.resolveActionConfigurationProperty,
+          {
+            context,
+            actionConfiguration,
+            files,
+            property,
+            escapeStrings
+          },
+          false
+        );
+        span.end();
+        return resolvedActionConfigurationProperty;
+      }
     );
   }
 
@@ -47,26 +57,22 @@ export default class SnowflakePlugin extends BasePlugin {
     datasourceConfiguration,
     actionConfiguration
   }: PluginExecutionProps<SnowflakeDatasourceConfiguration>): Promise<ExecutionOutput> {
-    const client = await this.createClient(datasourceConfiguration);
+    const client = await this.createConnection(datasourceConfiguration);
     try {
       const ret = new ExecutionOutput();
       const query = actionConfiguration.body ?? '';
       if (isEmpty(query)) {
         return ret;
       }
-      const warehouse = datasourceConfiguration.authentication?.custom?.warehouse?.value;
-
-      if (warehouse) {
-        await client.execute(`USE WAREHOUSE ${warehouse}`);
-      }
-
-      const rows = await client.execute(query, context.preparedStatementContext);
+      const rows = await this.executeQuery(() => {
+        return client.execute(query, context.preparedStatementContext);
+      });
       ret.output = normalizeTableColumnNames(rows);
       return ret;
     } catch (err) {
       throw new IntegrationError(`Snowflake query failed, ${err.message}`);
     } finally {
-      if (client) await this.destroyClient(client);
+      if (client) this.destroyConnection(client);
     }
   }
 
@@ -79,7 +85,7 @@ export default class SnowflakePlugin extends BasePlugin {
   }
 
   async metadata(datasourceConfiguration: SnowflakeDatasourceConfiguration): Promise<DatasourceMetadataDto> {
-    const client = await this.createClient(datasourceConfiguration);
+    const client = await this.createConnection(datasourceConfiguration);
     const auth = datasourceConfiguration.authentication;
     const database = auth?.custom?.databaseName?.value ?? '';
     const schema = auth?.custom?.schema?.value;
@@ -89,12 +95,18 @@ export default class SnowflakePlugin extends BasePlugin {
     // Ref: https://docs.snowflake.com/en/sql-reference/identifiers-syntax.html
     try {
       try {
-        rows = await client.execute(this.getMetadataQuery(database, schema));
+        rows = await this.executeQuery(() => {
+          return client.execute(this.getMetadataQuery(database, schema));
+        });
       } catch (err) {
-        rows = await client.execute(this.getMetadataQuery(database, schema, false));
+        rows = await this.executeQuery(() => {
+          return client.execute(this.getMetadataQuery(database, schema, false));
+        });
       }
     } catch (err) {
       throw new IntegrationError(`Fetching Snowflake metadata failed, ${err.message}`);
+    } finally {
+      if (client) this.destroyConnection(client);
     }
 
     const entities = rows.reduce((acc, attribute) => {
@@ -114,14 +126,13 @@ export default class SnowflakePlugin extends BasePlugin {
       return [...acc, table];
     }, []);
 
-    this.destroyClient(client);
-
     return {
       dbSchema: { tables: entities }
     };
   }
 
-  private async createClient(datasourceConfiguration: SnowflakeDatasourceConfiguration): Promise<Snowflake> {
+  @CreateConnection
+  private async createConnection(datasourceConfiguration: SnowflakeDatasourceConfiguration): Promise<Snowflake> {
     try {
       const auth = datasourceConfiguration.authentication;
       if (!auth) {
@@ -148,22 +159,16 @@ export default class SnowflakePlugin extends BasePlugin {
         }
       );
       await client.connect();
-      const warehouse = auth.custom?.warehouse?.value;
-      if (warehouse) {
-        await client.execute(`USE WAREHOUSE ${warehouse}`);
-      }
+      this.logger.debug(`Created connection`);
       return client;
     } catch (err) {
       throw new IntegrationError(`Snowflake configuration error, ${err.message}`);
     }
   }
 
-  private async destroyClient(client: Snowflake): Promise<void> {
-    try {
-      await client.destroy();
-    } catch (err) {
-      throw new IntegrationError(`Client teardown failed, ${err.message}`);
-    }
+  @DestroyConnection
+  private async destroyConnection(client: Snowflake): Promise<void> {
+    await client.destroy();
   }
 
   private getMetadataQuery(database: string, schema?: string, dbNameQuoted = true) {
@@ -192,8 +197,8 @@ export default class SnowflakePlugin extends BasePlugin {
     return `USE ${database}${schema ? `.${schema}` : ''}`;
   }
 
-  async test(datasourceConfiguration: SnowflakeDatasourceConfiguration): Promise<void> {
-    let client: Snowflake | undefined;
+  public async test(datasourceConfiguration: SnowflakeDatasourceConfiguration): Promise<void> {
+    const client = await this.createConnection(datasourceConfiguration);
     if (!datasourceConfiguration) {
       throw new IntegrationError('Datasource not specified for Snowflake plugin');
     }
@@ -207,12 +212,15 @@ export default class SnowflakePlugin extends BasePlugin {
     // Try both quoted and unquoted calls since we don't know how the identifier was set during creation
     // Ref: https://docs.snowflake.com/en/sql-reference/identifiers-syntax.html
     try {
-      client = await this.createClient(datasourceConfiguration);
-      await client.execute(this.getTestQuery(database, schema));
+      await this.executeQuery(() => {
+        return client.execute(this.getTestQuery(database, schema));
+      });
     } catch (err) {
       if (client) {
         try {
-          await client.execute(this.getTestQuery(database, schema, false));
+          await this.executeQuery(() => {
+            return client.execute(this.getTestQuery(database, schema, false));
+          });
         } catch (err) {
           throw new IntegrationError(`Test Snowflake connection failed, ${err.message}`);
         }
@@ -221,7 +229,7 @@ export default class SnowflakePlugin extends BasePlugin {
       }
     } finally {
       if (client) {
-        await this.destroyClient(client);
+        this.destroyConnection(client);
       }
     }
   }
