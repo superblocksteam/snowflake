@@ -10,7 +10,7 @@ import {
   TableType
 } from '@superblocksteam/shared';
 import {
-  DatabasePlugin,
+  DatabasePluginPooled,
   normalizeTableColumnNames,
   PluginExecutionProps,
   CreateConnection,
@@ -19,17 +19,13 @@ import {
 import { isEmpty } from 'lodash';
 import { Snowflake } from 'snowflake-promise';
 
-export default class SnowflakePlugin extends DatabasePlugin {
-  constructor() {
-    super({ useOrderedParameters: false });
-  }
+export default class SnowflakePlugin extends DatabasePluginPooled<Snowflake, SnowflakeDatasourceConfiguration> {
+  protected readonly useOrderedParameters = false;
 
-  async execute({
-    context,
-    datasourceConfiguration,
-    actionConfiguration
-  }: PluginExecutionProps<SnowflakeDatasourceConfiguration>): Promise<ExecutionOutput> {
-    const client = await this.createConnection(datasourceConfiguration);
+  async executePooled(
+    { context, actionConfiguration }: PluginExecutionProps<SnowflakeDatasourceConfiguration>,
+    client: Snowflake
+  ): Promise<ExecutionOutput> {
     try {
       const ret = new ExecutionOutput();
       const query = actionConfiguration.body ?? '';
@@ -43,11 +39,6 @@ export default class SnowflakePlugin extends DatabasePlugin {
       return ret;
     } catch (err) {
       throw new IntegrationError(`Snowflake query failed, ${err.message}`);
-    } finally {
-      if (client)
-        this.destroyConnection(client).catch(() => {
-          // Error handling is done in the decorator
-        });
     }
   }
 
@@ -110,7 +101,7 @@ export default class SnowflakePlugin extends DatabasePlugin {
   }
 
   @CreateConnection
-  private async createConnection(datasourceConfiguration: SnowflakeDatasourceConfiguration): Promise<Snowflake> {
+  protected async createConnection(datasourceConfiguration: SnowflakeDatasourceConfiguration): Promise<Snowflake> {
     try {
       const auth = datasourceConfiguration.authentication;
       if (!auth) {
@@ -145,7 +136,7 @@ export default class SnowflakePlugin extends DatabasePlugin {
   }
 
   @DestroyConnection
-  private async destroyConnection(client: Snowflake): Promise<void> {
+  protected async destroyConnection(client: Snowflake): Promise<void> {
     await client.destroy();
   }
 
